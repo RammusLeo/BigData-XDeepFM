@@ -9,7 +9,7 @@ from deepctr_torch.inputs import SparseFeat, DenseFeat, get_feature_names
 from deepctr_torch.models import *
 
 if __name__ == "__main__":
-    data = pd.read_csv('./criteo_sample.txt')
+    data = pd.read_csv('./data/criteo_sample.txt')
 
     sparse_features = ['C' + str(i) for i in range(1, 27)]
     dense_features = ['I' + str(i) for i in range(1, 14)]
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     use_cuda = True
     if use_cuda and torch.cuda.is_available():
         print('cuda ready...')
-        device = 'cuda:0'
+        device = 'cuda:7'
 
     model = DeepFM(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
                    task='binary',
