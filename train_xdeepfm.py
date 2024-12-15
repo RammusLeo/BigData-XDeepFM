@@ -12,6 +12,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--log', type=str, default='logs/my_log_file.txt', help='log place')
+parser.add_argument('--gpu', type=int, default=0, help='gpu id')
 args = parser.parse_args()
 
 logger = logging.getLogger('my_logger')
@@ -27,7 +28,7 @@ logger.addHandler(file_handler)
 
 if __name__ == "__main__":
     logger.info("start loading data, which will take around 3 min ...")
-    data = pd.read_csv('./data/train.txt', sep='\t')
+    data = pd.read_csv('./data/train_sample_10p.txt', sep='\t')
     # data_test = pd.read_csv('./data/test.txt')
     logger.info("successfully load data!")
     logger.info("start processing data, which will take around 10 min ...")
@@ -76,7 +77,7 @@ if __name__ == "__main__":
     use_cuda = True
     if use_cuda and torch.cuda.is_available():
         logger.info('cuda ready...')
-        device = 'cuda:7'
+        device = 'cuda:{}'.format(args.gpu)
     else:
         device = 'cpu'  # 添加这行以确保在没有CUDA时代码能正常运行
  
