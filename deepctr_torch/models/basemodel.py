@@ -266,7 +266,7 @@ class BaseModel(nn.Module):
                                 if name not in train_result:
                                     train_result[name] = []
                                 train_result[name].append(metric_fun(
-                                    y.cpu().data.numpy(), y_pred.cpu().data.numpy().astype("float64")))
+                                    y.cpu().data.numpy(), y_pred.cpu().data.numpy().astype("float64"), labels=[0,1]))
 
 
             except KeyboardInterrupt:
