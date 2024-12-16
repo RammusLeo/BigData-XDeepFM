@@ -17,3 +17,4 @@ from .dien import DIEN
 from .din import DIN
 from .afn import AFN
 from .multitask import SharedBottom, ESMM, MMOE, PLE
+from .xdeepfm_bcecc import xDeepFM_BCECC    

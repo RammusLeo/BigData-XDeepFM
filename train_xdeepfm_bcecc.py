@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 
 from deepctr_torch.inputs import SparseFeat, DenseFeat, get_feature_names
-from deepctr_torch.models import xDeepFM
+from deepctr_torch.models import xDeepFM_BCECC
 import logging
 import argparse
 
@@ -82,11 +82,11 @@ if __name__ == "__main__":
     else:
         device = 'cpu'  # 添加这行以确保在没有CUDA时代码能正常运行
  
-    model = xDeepFM(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
+    model = xDeepFM_BCECC(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
                    task='binary',
                    l2_reg_embedding=1e-5, device=device)
  
-    model.compile("adagrad", "binary_crossentropy",
+    model.compile("adagrad", "bce_cont",
                   metrics=["binary_crossentropy", "auc"], )
  
     history = model.fit(train_model_input, data_train[target].values, batch_size=256, epochs=10, verbose=2,

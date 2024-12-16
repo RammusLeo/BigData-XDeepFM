@@ -29,6 +29,7 @@ from ..inputs import build_input_features, SparseFeat, DenseFeat, VarLenSparseFe
 from ..layers import PredictionLayer
 from ..layers.utils import slice_arrays
 from ..callbacks import History
+from ..losses import combined_loss
 
 
 class Linear(nn.Module):
@@ -241,17 +242,21 @@ class BaseModel(nn.Module):
                     for _, (x_train, y_train) in t:
                         x = x_train.to(self.device).float()
                         y = y_train.to(self.device).float()
-
-                        y_pred = model(x).squeeze()
-
-                        optim.zero_grad()
-                        if isinstance(loss_func, list):
-                            assert len(loss_func) == self.num_tasks,\
-                                "the length of `loss_func` should be equal with `self.num_tasks`"
-                            loss = sum(
-                                [loss_func[i](y_pred[:, i], y[:, i], reduction='sum') for i in range(self.num_tasks)])
+                       
+                        if loss_func.__name__ == "combined_loss":
+                            z, logits, y_pred = model(x)
+                            optim.zero_grad()
+                            loss = loss_func(y.squeeze(), y_pred, z, logits, alpha=0.9, tau=0.4)
                         else:
-                            loss = loss_func(y_pred, y.squeeze(), reduction='sum')
+                            y_pred = model(x)
+                            optim.zero_grad()
+                            if isinstance(loss_func, list):
+                                assert len(loss_func) == self.num_tasks,\
+                                    "the length of `loss_func` should be equal with `self.num_tasks`"
+                                loss = sum(
+                                    [loss_func[i](y_pred[:, i], y[:, i], reduction='sum') for i in range(self.num_tasks)])
+                            else:
+                                loss = loss_func(y_pred, y.squeeze(), reduction='sum')
                         reg_loss = self.get_regularization_loss()
 
                         total_loss = loss + reg_loss + self.aux_loss
@@ -345,8 +350,11 @@ class BaseModel(nn.Module):
         with torch.no_grad():
             for _, x_test in enumerate(test_loader):
                 x = x_test[0].to(self.device).float()
-
-                y_pred = model(x).cpu().data.numpy()  # .squeeze()
+                if self.loss_func.__name__ == "combined_loss":
+                    _, _, y_pred = model(x)
+                    y_pred = y_pred.cpu().data.numpy()
+                else:
+                    y_pred = model(x).cpu().data.numpy()
                 pred_ans.append(y_pred)
 
         return np.concatenate(pred_ans).astype("float64")
@@ -476,6 +484,8 @@ class BaseModel(nn.Module):
             loss_func = F.mse_loss
         elif loss == "mae":
             loss_func = F.l1_loss
+        elif loss == "bce_cont":
+            loss_func = combined_loss
         else:
             raise NotImplementedError
         return loss_func
