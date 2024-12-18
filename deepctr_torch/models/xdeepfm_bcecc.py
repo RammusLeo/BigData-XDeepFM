@@ -8,10 +8,55 @@ Reference:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .basemodel import BaseModel
 from ..inputs import combined_dnn_input
 from ..layers import DNN, CIN
+
+class FeatureFusion(nn.Module):
+    def __init__(self, input_dim=256, fusion_dim=256, method='weighted_sum'):
+        """
+        Args:
+            input_dim: 每个分支的输入特征维度
+            fusion_dim: 融合后特征的维度
+            method: 融合方法 ['weighted_sum', 'mlp']
+        """
+        super(FeatureFusion, self).__init__()
+        self.method = method
+        
+        if method == 'weighted_sum':
+            # 每个分支的权重
+            self.weights = nn.Parameter(torch.ones(3))  # 初始化为相等权重
+
+        elif method == 'mlp':
+            # 使用MLP降维融合特征
+            self.mlp = nn.Sequential(
+                nn.Linear(input_dim * 3, fusion_dim),
+                nn.ReLU(),
+                nn.Linear(fusion_dim, fusion_dim)
+            )
+        else:
+            raise ValueError("Fusion method must be 'weighted_sum' or 'mlp'")
+
+    def forward(self, x1, x2, x3):
+        """
+        Args:
+            x1, x2, x3: 三个分支输出的特征, 形状均为 (B, input_dim)
+        Returns:
+            fused_feature: 融合后的特征, 形状为 (B, fusion_dim)
+        """
+        if self.method == 'weighted_sum':
+            # 加权求和融合
+            weights = F.softmax(self.weights, dim=0)  # 归一化权重
+            fused_feature = weights[0] * x1 + weights[1] * x2 + weights[2] * x3
+        
+        elif self.method == 'mlp':
+            # 拼接特征并通过MLP变换
+            fused_feature = torch.cat([x1, x2, x3], dim=1)  # 拼接: (B, input_dim * 3)
+            fused_feature = self.mlp(fused_feature)  # MLP输出: (B, fusion_dim)
+        
+        return fused_feature
 
 
 class xDeepFM_BCECC(BaseModel):
@@ -53,11 +98,11 @@ class xDeepFM_BCECC(BaseModel):
             self.dnn = DNN(self.compute_input_dim(dnn_feature_columns), dnn_hidden_units,
                            activation=dnn_activation, l2_reg=l2_reg_dnn, dropout_rate=dnn_dropout, use_bn=dnn_use_bn,
                            init_std=init_std, device=device)
-            self.dnn_linear = nn.Linear(dnn_hidden_units[-1], 2, bias=False).to(device)
+            # self.dnn_linear = nn.Linear(dnn_hidden_units[-1], 2, bias=False).to(device)
             self.add_regularization_weight(
                 filter(lambda x: 'weight' in x[0] and 'bn' not in x[0], self.dnn.named_parameters()), l2=l2_reg_dnn)
 
-            self.add_regularization_weight(self.dnn_linear.weight, l2=l2_reg_dnn)
+            # self.add_regularization_weight(self.dnn_linear.weight, l2=l2_reg_dnn)
 
         self.cin_layer_size = cin_layer_size
         self.use_cin = len(self.cin_layer_size) > 0 and len(dnn_feature_columns) > 0
@@ -70,9 +115,15 @@ class xDeepFM_BCECC(BaseModel):
                 self.featuremap_num = sum(cin_layer_size)
             self.cin = CIN(field_num, cin_layer_size,
                            cin_activation, cin_split_half, l2_reg_cin, seed, device=device)
-            self.cin_linear = nn.Linear(self.featuremap_num, 2, bias=False).to(device)
+            # self.cin_linear = nn.Linear(self.featuremap_num, 2, bias=False).to(device)
             self.add_regularization_weight(filter(lambda x: 'weight' in x[0], self.cin.named_parameters()),
                                            l2=l2_reg_cin)
+        
+        self.feature_fusion = FeatureFusion(input_dim=256, fusion_dim=256, method='mlp')
+        self.add_regularization_weight(filter(lambda x: 'weight' in x[0], self.feature_fusion.mlp.named_parameters()), l2=l2_reg_linear)
+
+        self.final_logit = nn.Linear(256, 1, bias=False).to(device)
+        self.add_regularization_weight(self.final_logit.weight, l2=l2_reg_linear)
 
         self.to(device)
 
@@ -81,29 +132,26 @@ class xDeepFM_BCECC(BaseModel):
         sparse_embedding_list, dense_value_list = self.input_from_feature_columns(X, self.dnn_feature_columns,
                                                                                   self.embedding_dict)
 
-        linear_logit = self.linear_model(X)
+        linear_feature = self.linear_model(X)
         if self.use_cin:
             cin_input = torch.cat(sparse_embedding_list, dim=1)
             cin_output = self.cin(cin_input)
-            cin_logit = self.cin_linear(cin_output)
+            # cin_logit = self.cin_linear(cin_output)
         if self.use_dnn:
             dnn_input = combined_dnn_input(sparse_embedding_list, dense_value_list)
             dnn_output = self.dnn(dnn_input)
-            dnn_logit = self.dnn_linear(dnn_output)
+            # dnn_logit = self.dnn_linear(dnn_output)
+        fusion_feature = self.feature_fusion(linear_feature, cin_output, dnn_output)
+        # if len(self.dnn_hidden_units) == 0 and len(self.cin_layer_size) == 0:  # only linear
+        #     final_logit = linear_logit
+        # elif len(self.dnn_hidden_units) == 0 and len(self.cin_layer_size) > 0:  # linear + CIN
+        #     final_logit = linear_logit + cin_logit
+        # elif len(self.dnn_hidden_units) > 0 and len(self.cin_layer_size) == 0:  # linear +　Deep
+        #     final_logit = linear_logit + dnn_logit
+        # elif len(self.dnn_hidden_units) > 0 and len(self.cin_layer_size) > 0:  # linear + CIN + Deep
+        #     final_logit = linear_logit + dnn_logit + cin_logit
+        # else:
+        #     raise NotImplementedError
+        final_logit = self.final_logit(fusion_feature)
 
-        if len(self.dnn_hidden_units) == 0 and len(self.cin_layer_size) == 0:  # only linear
-            final_logit = linear_logit
-        elif len(self.dnn_hidden_units) == 0 and len(self.cin_layer_size) > 0:  # linear + CIN
-            final_logit = linear_logit + cin_logit
-        elif len(self.dnn_hidden_units) > 0 and len(self.cin_layer_size) == 0:  # linear +　Deep
-            final_logit = linear_logit + dnn_logit
-        elif len(self.dnn_hidden_units) > 0 and len(self.cin_layer_size) > 0:  # linear + CIN + Deep
-            final_logit = linear_logit + dnn_logit + cin_logit
-        else:
-            raise NotImplementedError
-
-        z = final_logit
-        final_logit = self.out(final_logit)
-        y_pred = torch.softmax(final_logit, dim=1).argmax(dim=1)
-
-        return z, final_logit, y_pred
+        return fusion_feature, final_logit

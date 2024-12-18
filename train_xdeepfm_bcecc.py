@@ -83,10 +83,10 @@ if __name__ == "__main__":
         device = 'cpu'  # 添加这行以确保在没有CUDA时代码能正常运行
  
     model = xDeepFM_BCECC(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
-                   task='binary',
+                   task='binary_cc',
                    l2_reg_embedding=1e-5, device=device)
  
-    model.compile("adagrad", "bce_cont",
+    model.compile("adagrad", "new_bce_cont",
                   metrics=["binary_crossentropy", "auc"], )
  
     history = model.fit(train_model_input, data_train[target].values, batch_size=256, epochs=10, verbose=2,

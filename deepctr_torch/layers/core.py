@@ -142,7 +142,7 @@ class PredictionLayer(nn.Module):
     """
 
     def __init__(self, task='binary', use_bias=True, **kwargs):
-        if task not in ["binary", "multiclass", "regression"]:
+        if task not in ["binary", "multiclass", "regression", "binary_cc"]:
             raise ValueError("task must be binary,multiclass or regression")
 
         super(PredictionLayer, self).__init__()
@@ -155,7 +155,7 @@ class PredictionLayer(nn.Module):
         output = X
         if self.use_bias:
             output += self.bias
-        if self.task == "binary":
+        if self.task == "binary" or self.task =="binary_cc":
             output = torch.sigmoid(output)
         return output
 

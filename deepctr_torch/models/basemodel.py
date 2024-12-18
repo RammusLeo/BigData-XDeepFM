@@ -30,6 +30,7 @@ from ..layers import PredictionLayer
 from ..layers.utils import slice_arrays
 from ..callbacks import History
 from ..losses import combined_loss
+from ..new_losses import bcecc_loss
 
 
 class Linear(nn.Module):
@@ -47,12 +48,6 @@ class Linear(nn.Module):
 
         self.embedding_dict = create_embedding_matrix(feature_columns, init_std, linear=True, sparse=False,
                                                       device=device)
-
-        #         nn.ModuleDict(
-        #             {feat.embedding_name: nn.Embedding(feat.dimension, 1, sparse=True) for feat in
-        #              self.sparse_feature_columns}
-        #         )
-        # .to("cuda:1")
         for tensor in self.embedding_dict.values():
             nn.init.normal_(tensor.weight, mean=0, std=init_std)
 
@@ -76,7 +71,6 @@ class Linear(nn.Module):
                                                         self.varlen_sparse_feature_columns, self.device)
 
         sparse_embedding_list += varlen_embedding_list
-
         linear_logit = torch.zeros([X.shape[0], 1]).to(self.device)
         if len(sparse_embedding_list) > 0:
             sparse_embedding_cat = torch.cat(sparse_embedding_list, dim=-1)
@@ -92,6 +86,58 @@ class Linear(nn.Module):
 
         return linear_logit
 
+class LinearBCECC(nn.Module):
+    def __init__(self, feature_columns, feature_index, init_std=0.0001, device='cpu'):
+        super(LinearBCECC, self).__init__()
+        self.feature_index = feature_index
+        self.device = device
+        self.sparse_feature_columns = list(
+            filter(lambda x: isinstance(x, SparseFeat), feature_columns)) if len(feature_columns) else []
+        self.dense_feature_columns = list(
+            filter(lambda x: isinstance(x, DenseFeat), feature_columns)) if len(feature_columns) else []
+
+        self.varlen_sparse_feature_columns = list(
+            filter(lambda x: isinstance(x, VarLenSparseFeat), feature_columns)) if len(feature_columns) else []
+
+        self.embedding_dict = create_embedding_matrix(feature_columns, init_std, linear=True, sparse=False,
+                                                      device=device)
+        for tensor in self.embedding_dict.values():
+            nn.init.normal_(tensor.weight, mean=0, std=init_std)
+
+        if len(self.dense_feature_columns) > 0:
+            self.weight = nn.Parameter(torch.Tensor(sum(fc.dimension for fc in self.dense_feature_columns), 256).to(
+                device))
+            torch.nn.init.normal_(self.weight, mean=0, std=init_std)
+
+    def forward(self, X, sparse_feat_refine_weight=None):
+
+        sparse_embedding_list = [self.embedding_dict[feat.embedding_name](
+            X[:, self.feature_index[feat.name][0]:self.feature_index[feat.name][1]].long()) for
+            feat in self.sparse_feature_columns]
+
+        dense_value_list = [X[:, self.feature_index[feat.name][0]:self.feature_index[feat.name][1]] for feat in
+                            self.dense_feature_columns]
+
+        sequence_embed_dict = varlen_embedding_lookup(X, self.embedding_dict, self.feature_index,
+                                                      self.varlen_sparse_feature_columns)
+        varlen_embedding_list = get_varlen_pooling_list(sequence_embed_dict, X, self.feature_index,
+                                                        self.varlen_sparse_feature_columns, self.device)
+
+        sparse_embedding_list += varlen_embedding_list
+        linear_logit = torch.zeros([X.shape[0], 256]).to(self.device)
+        if len(sparse_embedding_list) > 0:
+            sparse_embedding_cat = torch.cat(sparse_embedding_list, dim=-1)
+            if sparse_feat_refine_weight is not None:
+                # w_{x,i}=m_{x,i} * w_i (in IFM and DIFM)
+                sparse_embedding_cat = sparse_embedding_cat * sparse_feat_refine_weight.unsqueeze(1)
+            sparse_feat_logit = torch.sum(sparse_embedding_cat, dim=-1, keepdim=False)
+            linear_logit += sparse_feat_logit
+        if len(dense_value_list) > 0:
+            dense_value_logit = torch.cat(
+                dense_value_list, dim=-1).matmul(self.weight)
+            linear_logit += dense_value_logit
+
+        return linear_logit
 
 class BaseModel(nn.Module):
     def __init__(self, linear_feature_columns, dnn_feature_columns, l2_reg_linear=1e-5, l2_reg_embedding=1e-5,
@@ -114,13 +160,13 @@ class BaseModel(nn.Module):
         self.dnn_feature_columns = dnn_feature_columns
 
         self.embedding_dict = create_embedding_matrix(dnn_feature_columns, init_std, sparse=False, device=device)
-        #         nn.ModuleDict(
-        #             {feat.embedding_name: nn.Embedding(feat.dimension, embedding_size, sparse=True) for feat in
-        #              self.dnn_feature_columns}
-        #         )
 
-        self.linear_model = Linear(
-            linear_feature_columns, self.feature_index, device=device)
+        if task == "binary_cc":
+            self.linear_model = LinearBCECC(
+                linear_feature_columns, self.feature_index, device=device)
+        else:
+            self.linear_model = Linear(
+                linear_feature_columns, self.feature_index, device=device)
 
         self.regularization_weight = []
 
@@ -243,10 +289,10 @@ class BaseModel(nn.Module):
                         x = x_train.to(self.device).float()
                         y = y_train.to(self.device).float()
                        
-                        if loss_func.__name__ == "combined_loss":
-                            z, logits, y_pred = model(x)
+                        if loss_func.__name__ == "bcecc_loss":
+                            z, y_pred = model(x)    # B ,2
                             optim.zero_grad()
-                            loss = loss_func(y.squeeze(), y_pred, z, logits, alpha=0.9, tau=0.4)
+                            loss = loss_func(y_pred, y.squeeze(), z, alpha=0.9, tau=0.4)
                         else:
                             y_pred = model(x)
                             optim.zero_grad()
@@ -350,8 +396,8 @@ class BaseModel(nn.Module):
         with torch.no_grad():
             for _, x_test in enumerate(test_loader):
                 x = x_test[0].to(self.device).float()
-                if self.loss_func.__name__ == "combined_loss":
-                    _, _, y_pred = model(x)
+                if self.loss_func.__name__ == "bcecc_loss":
+                    _, y_pred = model(x)
                     y_pred = y_pred.cpu().data.numpy()
                 else:
                     y_pred = model(x).cpu().data.numpy()
@@ -486,6 +532,8 @@ class BaseModel(nn.Module):
             loss_func = F.l1_loss
         elif loss == "bce_cont":
             loss_func = combined_loss
+        elif loss == "new_bce_cont":
+            loss_func = bcecc_loss
         else:
             raise NotImplementedError
         return loss_func

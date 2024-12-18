@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 
 def contrastive_loss(logits, labels, tau=0.4):
     """
@@ -48,7 +49,7 @@ def contrastive_loss(logits, labels, tau=0.4):
     total_loss /= N
     return total_loss
 
-def combined_loss(labels, y_pred, z, logits, alpha=0.9, tau=0.4):
+def combined_loss(y_pred, labels, z, alpha=0.9, tau=0.4):
     """
     Compute a weighted combination of contrastive loss and BCE loss.
 
@@ -65,24 +66,28 @@ def combined_loss(labels, y_pred, z, logits, alpha=0.9, tau=0.4):
     # Contrastive loss
     loss_contrastive = contrastive_loss(z, labels, tau)
 
-    logits_bce = logits[:, 1]  # Select logits for the positive class (class 1)
-    loss_bce = F.binary_cross_entropy(logits_bce, labels.float())
+    # z_bce = z[:, 1]  # Select logits for the positive class (class 1)
+    # loss_bce = F.binary_cross_entropy_with_logits(z_bce, labels.float())
+    criterion = nn.CrossEntropyLoss()
+    loss_bce = criterion(z, labels.long())
+
 
     # Weighted sum of the losses
-    total_loss = (1 - alpha) * loss_contrastive + alpha * loss_bce
+    total_loss = 0.1 * (1 - alpha) * loss_contrastive + alpha * loss_bce
+    
+    # print(f"Contrastive Loss: {loss_contrastive.item()}, BCE Loss: {loss_bce.item()}")
     return total_loss
 
 # Example Usage
 if __name__ == "__main__":
     # Dummy logits (batch size 4, embedding dimension 5)
-    logits = torch.randn(4, 2, requires_grad=True)
-
+    z = torch.randn(4, 2, requires_grad=True)
+    logits = nn.Sigmoid()(z)
+    y_pred = torch.argmax(logits, dim=1)
     # Labels for contrastive loss
     labels = torch.tensor([0.0, 1.0, 0.0, 1.0])
 
     # Alpha for weighting losses
     alpha = 0.9
-    import pdb; pdb.set_trace()
-    # Compute combined loss
-    loss = combined_loss(logits, labels, alpha=alpha, tau=0.4)
+    loss = combined_loss(labels, y_pred, z, logits, alpha=alpha, tau=0.4)
     print(f"Combined Loss: {loss.item()}")
