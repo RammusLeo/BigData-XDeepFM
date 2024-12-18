@@ -8,26 +8,17 @@ from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 
 from deepctr_torch.inputs import SparseFeat, DenseFeat, get_feature_names
 from deepctr_torch.models import xDeepFM_BCECC
-import logging
+from deepctr_torch.logger import setup_logger
 import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--log', type=str, default='my_log_file.txt', help='log place')
-parser.add_argument('--gpu', type=int, default=0, help='gpu id')
+parser.add_argument('--gpus', type=int, default=0, help='gpu id')
 args = parser.parse_args()
 
-logger = logging.getLogger('my_logger')
-logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(os.path.join('./logs',args.log))
-file_handler.setLevel(logging.DEBUG)
-# 配置日志记录
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
  
-# 将文件处理器添加到日志记录器中
-logger.addHandler(file_handler)
-
 if __name__ == "__main__":
+    logger = setup_logger(log_file=os.path.join('./logs',args.log))
     logger.info("start loading data, which will take around 3 min ...")
     data = pd.read_csv('./data/train_sample_10p.txt', sep='\t')
     # data_test = pd.read_csv('./data/test.txt')
@@ -78,19 +69,19 @@ if __name__ == "__main__":
     use_cuda = True
     if use_cuda and torch.cuda.is_available():
         logger.info('cuda ready...')
-        device = 'cuda:{}'.format(args.gpu)
+        device = 'cuda:{}'.format(args.gpus)
     else:
         device = 'cpu'  # 添加这行以确保在没有CUDA时代码能正常运行
  
     model = xDeepFM_BCECC(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
-                   task='binary_cc',
+                   task='binary_cc',dnn_use_bn=True,dnn_dropout=0.5,
                    l2_reg_embedding=1e-5, device=device)
  
     model.compile("adagrad", "new_bce_cont",
                   metrics=["binary_crossentropy", "auc"], )
  
     history = model.fit(train_model_input, data_train[target].values, batch_size=256, epochs=10, verbose=2,
-                        validation_split=0.2)
+                        validation_split=0.2, logger=logger)
     pred_ans = model.predict(test_model_input, 256)
     logger.info("test LogLoss: {:.4f}".format(log_loss(data_test[target].values, pred_ans)))
     logger.info("test AUC: {:.4f}".format(roc_auc_score(data_test[target].values, pred_ans)))

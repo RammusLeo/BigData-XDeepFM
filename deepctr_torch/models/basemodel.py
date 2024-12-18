@@ -182,7 +182,7 @@ class BaseModel(nn.Module):
         self.history = History()
 
     def fit(self, x=None, y=None, batch_size=None, epochs=1, verbose=1, initial_epoch=0, validation_split=0.,
-            validation_data=None, shuffle=True, callbacks=None):
+            validation_data=None, shuffle=True, callbacks=None, logger=None):
         """
 
         :param x: Numpy array of training data (if the model has a single input), or list of Numpy arrays (if the model has multiple inputs).If input layers in the model are named, you can also pass a
@@ -251,14 +251,14 @@ class BaseModel(nn.Module):
         optim = self.optim
 
         if self.gpus:
-            print('parallel running on these gpus:', self.gpus)
+            logger.info('parallel running on these gpus:', self.gpus)
             model = torch.nn.DataParallel(model, device_ids=self.gpus)
             batch_size *= len(self.gpus)  # input `batch_size` is batch_size per gpu
         else:
-            print(self.device)
+            logger.info(self.device)
 
         train_loader = DataLoader(
-            dataset=train_tensor_data, shuffle=shuffle, batch_size=batch_size)
+            dataset=train_tensor_data, shuffle=shuffle, batch_size=batch_size, num_workers=16)
 
         sample_num = len(train_tensor_data)
         steps_per_epoch = (sample_num - 1) // batch_size + 1
@@ -274,7 +274,7 @@ class BaseModel(nn.Module):
         callbacks.model.stop_training = False
 
         # Train
-        print("Train on {0} samples, validate on {1} samples, {2} steps per epoch".format(
+        logger.info("Train on {0} samples, validate on {1} samples, {2} steps per epoch".format(
             len(train_tensor_data), len(val_y), steps_per_epoch))
         for epoch in range(initial_epoch, epochs):
             callbacks.on_epoch_begin(epoch)
@@ -337,7 +337,7 @@ class BaseModel(nn.Module):
             # verbose
             if verbose > 0:
                 epoch_time = int(time.time() - start_time)
-                print('Epoch {0}/{1}'.format(epoch + 1, epochs))
+                logger.info('Epoch {0}/{1}'.format(epoch + 1, epochs))
 
                 eval_str = "{0}s - loss: {1: .4f}".format(
                     epoch_time, epoch_logs["loss"])
@@ -350,7 +350,7 @@ class BaseModel(nn.Module):
                     for name in self.metrics:
                         eval_str += " - " + "val_" + name + \
                                     ": {0: .4f}".format(epoch_logs["val_" + name])
-                print(eval_str)
+                logger.info(eval_str)
             callbacks.on_epoch_end(epoch, epoch_logs)
             if self.stop_training:
                 break
@@ -390,7 +390,7 @@ class BaseModel(nn.Module):
         tensor_data = Data.TensorDataset(
             torch.from_numpy(np.concatenate(x, axis=-1)))
         test_loader = DataLoader(
-            dataset=tensor_data, shuffle=False, batch_size=batch_size)
+            dataset=tensor_data, shuffle=False, batch_size=batch_size, num_workers=16)
 
         pred_ans = []
         with torch.no_grad():

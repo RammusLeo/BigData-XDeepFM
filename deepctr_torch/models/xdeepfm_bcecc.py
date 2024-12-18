@@ -34,6 +34,7 @@ class FeatureFusion(nn.Module):
             self.mlp = nn.Sequential(
                 nn.Linear(input_dim * 3, fusion_dim),
                 nn.ReLU(),
+                nn.Dropout(0.5),
                 nn.Linear(fusion_dim, fusion_dim)
             )
         else:
@@ -121,7 +122,6 @@ class xDeepFM_BCECC(BaseModel):
         
         self.feature_fusion = FeatureFusion(input_dim=256, fusion_dim=256, method='mlp')
         self.add_regularization_weight(filter(lambda x: 'weight' in x[0], self.feature_fusion.mlp.named_parameters()), l2=l2_reg_linear)
-
         self.final_logit = nn.Linear(256, 1, bias=False).to(device)
         self.add_regularization_weight(self.final_logit.weight, l2=l2_reg_linear)
 
