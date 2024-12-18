@@ -9,6 +9,7 @@ from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 from deepctr_torch.inputs import SparseFeat, DenseFeat, get_feature_names
 from deepctr_torch.models import xDeepFM_BCECC
 from deepctr_torch.logger import setup_logger
+from deepctr_torch.callbacks import EarlyStopping
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -64,7 +65,7 @@ if __name__ == "__main__":
     test_model_input = {name: data_test[name] for name in feature_names}
 
     logger.info("successfully get data!")
- 
+
     # 4.Define Model,train,predict and evaluate
     use_cuda = True
     if use_cuda and torch.cuda.is_available():
@@ -72,7 +73,7 @@ if __name__ == "__main__":
         device = 'cuda:{}'.format(args.gpus)
     else:
         device = 'cpu'  # 添加这行以确保在没有CUDA时代码能正常运行
- 
+    es = EarlyStopping(monitor='val_binary_crossentropy', min_delta=0, verbose=1, patience=0, mode='min')
     model = xDeepFM_BCECC(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
                    task='binary_cc',dnn_use_bn=True,dnn_dropout=0.5,
                    l2_reg_embedding=1e-5, device=device)
@@ -81,7 +82,7 @@ if __name__ == "__main__":
                   metrics=["binary_crossentropy", "auc"], )
  
     history = model.fit(train_model_input, data_train[target].values, batch_size=256, epochs=10, verbose=2,
-                        validation_split=0.2, logger=logger)
+                        validation_split=0.2, logger=logger, callbacks=[es])
     pred_ans = model.predict(test_model_input, 256)
     logger.info("test LogLoss: {:.4f}".format(log_loss(data_test[target].values, pred_ans)))
     logger.info("test AUC: {:.4f}".format(roc_auc_score(data_test[target].values, pred_ans)))

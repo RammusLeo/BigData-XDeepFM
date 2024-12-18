@@ -285,14 +285,14 @@ class BaseModel(nn.Module):
             train_result = {}
             try:
                 with tqdm(enumerate(train_loader), disable=verbose != 1) as t:
-                    for _, (x_train, y_train) in t:
+                    for idx, (x_train, y_train) in t:
                         x = x_train.to(self.device).float()
                         y = y_train.to(self.device).float()
                        
                         if loss_func.__name__ == "bcecc_loss":
                             z, y_pred = model(x)    # B ,2
                             optim.zero_grad()
-                            loss = loss_func(y_pred, y.squeeze(), z, alpha=0.9, tau=0.4)
+                            loss = loss_func(y_pred, y.squeeze(), z, alpha=0.6, tau=0.4)
                         else:
                             y_pred = model(x)
                             optim.zero_grad()
@@ -302,7 +302,7 @@ class BaseModel(nn.Module):
                                 loss = sum(
                                     [loss_func[i](y_pred[:, i], y[:, i], reduction='sum') for i in range(self.num_tasks)])
                             else:
-                                loss = loss_func(y_pred, y.squeeze(), reduction='sum')
+                                loss = loss_func(y_pred.squeeze(), y.squeeze(), reduction='sum')
                         reg_loss = self.get_regularization_loss()
 
                         total_loss = loss + reg_loss + self.aux_loss
@@ -319,6 +319,22 @@ class BaseModel(nn.Module):
                                 train_result[name].append(metric_fun(
                                     y.cpu().data.numpy(), y_pred.cpu().data.numpy().astype("float64"), labels=[0,1]))
 
+
+                            if idx % 500 == 0:
+                                for name, result in train_result.items():
+                                    epoch_logs[name] = np.sum(result) / len(result)
+
+                                eval_result = self.evaluate(val_x, val_y, batch_size)
+                                for name, result in eval_result.items():
+                                    epoch_logs["val_" + name] = result
+                                
+                                eval_str = ""
+                                for name in self.metrics:
+                                    eval_str += " - " + name + \
+                                                ": {0: .4f}".format(epoch_logs[name])
+                                    eval_str += " - " + "val_" + name + \
+                                                ": {0: .4f}".format(epoch_logs["val_" + name])
+                                logger.info(eval_str)
 
             except KeyboardInterrupt:
                 t.close()
