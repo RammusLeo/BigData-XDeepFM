@@ -375,6 +375,198 @@ class BaseModel(nn.Module):
 
         return self.history
 
+    def ddp_fit(self, x=None, y=None, batch_size=None, epochs=1, verbose=1, initial_epoch=0, validation_split=0.,
+        validation_data=None, shuffle=True, callbacks=None, logger=None, use_ddp=False):
+        """
+        Fit function for training with Distributed Data Parallel (DDP) support.
+
+        :param use_ddp: Boolean, whether to use DDP for multi-GPU training.
+        """
+        if isinstance(x, dict):
+            x = [x[feature] for feature in self.feature_index]
+
+        do_validation = False
+        if validation_data:
+            do_validation = True
+            if len(validation_data) == 2:
+                val_x, val_y = validation_data
+                val_sample_weight = None
+            elif len(validation_data) == 3:
+                val_x, val_y, val_sample_weight = validation_data
+            else:
+                raise ValueError(
+                    'When passing a `validation_data` argument, it must contain either 2 items (x_val, y_val), '
+                    'or 3 items (x_val, y_val, val_sample_weights), '
+                    'or alternatively it could be a dataset or a dataset iterator. '
+                    'However we received `validation_data=%s`' % validation_data)
+            if isinstance(val_x, dict):
+                val_x = [val_x[feature] for feature in self.feature_index]
+
+        elif validation_split and 0. < validation_split < 1.:
+            do_validation = True
+            if hasattr(x[0], 'shape'):
+                split_at = int(x[0].shape[0] * (1. - validation_split))
+            else:
+                split_at = int(len(x[0]) * (1. - validation_split))
+            x, val_x = (slice_arrays(x, 0, split_at), slice_arrays(x, split_at))
+            y, val_y = (slice_arrays(y, 0, split_at), slice_arrays(y, split_at))
+        else:
+            val_x = []
+            val_y = []
+
+        # Expand dimensions if necessary
+        for i in range(len(x)):
+            if len(x[i].shape) == 1:
+                x[i] = np.expand_dims(x[i], axis=1)
+
+        # Prepare DataLoader
+        train_tensor_data = Data.TensorDataset(
+            torch.from_numpy(np.concatenate(x, axis=-1)),
+            torch.from_numpy(y))
+
+        if batch_size is None:
+            batch_size = 256
+
+        model = self.train()
+        loss_func = self.loss_func
+        optim = self.optim
+
+        # Initialize DDP if needed
+        if use_ddp:
+            dist.init_process_group(backend='nccl')
+            local_rank = dist.get_rank()
+            torch.cuda.set_device(local_rank)  # Set device for each process
+            model = model.to(local_rank)
+            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+
+            batch_size *= dist.get_world_size()  # Adjust batch size for each GPU
+
+        else:
+            logger.info(self.device)
+
+        train_sampler = DistributedSampler(train_tensor_data, shuffle=True) if use_ddp else None
+        train_loader = DataLoader(
+            dataset=train_tensor_data, shuffle=(train_sampler is None), batch_size=batch_size, 
+            num_workers=16, sampler=train_sampler)
+
+        sample_num = len(train_tensor_data)
+        steps_per_epoch = (sample_num - 1) // batch_size + 1
+
+        # configure callbacks
+        callbacks = (callbacks or []) + [self.history]  # add history callback
+        callbacks = CallbackList(callbacks)
+        callbacks.set_model(self)
+        callbacks.on_train_begin()
+        callbacks.set_model(self)
+        if not hasattr(callbacks, 'model'):  # for tf1.4
+            callbacks.__setattr__('model', self)
+        callbacks.model.stop_training = False
+
+        # Train
+        logger.info("Train on {0} samples, validate on {1} samples, {2} steps per epoch".format(
+            len(train_tensor_data), len(val_y), steps_per_epoch))
+
+        for epoch in range(initial_epoch, epochs):
+            callbacks.on_epoch_begin(epoch)
+            epoch_logs = {}
+            start_time = time.time()
+            loss_epoch = 0
+            total_loss_epoch = 0
+            train_result = {}
+
+            try:
+                with tqdm(enumerate(train_loader), disable=verbose != 1) as t:
+                    for idx, (x_train, y_train) in t:
+                        x = x_train.to(self.device).float()
+                        y = y_train.to(self.device).float()
+
+                        if loss_func.__name__ == "bcecc_loss":
+                            z, y_pred = model(x)  # B ,2
+                            optim.zero_grad()
+                            loss = loss_func(y_pred, y.squeeze(), z, alpha=0.6, tau=0.4)
+                        else:
+                            y_pred = model(x)
+                            optim.zero_grad()
+                            if isinstance(loss_func, list):
+                                assert len(loss_func) == self.num_tasks, \
+                                    "the length of `loss_func` should be equal with `self.num_tasks`"
+                                loss = sum(
+                                    [loss_func[i](y_pred[:, i], y[:, i], reduction='sum') for i in range(self.num_tasks)])
+                            else:
+                                loss = loss_func(y_pred.squeeze(), y.squeeze(), reduction='sum')
+
+                        reg_loss = self.get_regularization_loss()
+                        total_loss = loss + reg_loss + self.aux_loss
+
+                        loss_epoch += loss.item()
+                        total_loss_epoch += total_loss.item()
+                        total_loss.backward()
+                        optim.step()
+
+                        if verbose > 0:
+                            for name, metric_fun in self.metrics.items():
+                                if name not in train_result:
+                                    train_result[name] = []
+                                train_result[name].append(metric_fun(
+                                    y.cpu().data.numpy(), y_pred.cpu().data.numpy().astype("float64"), labels=[0, 1]))
+
+                            if idx % 500 == 0:
+                                for name, result in train_result.items():
+                                    epoch_logs[name] = np.sum(result) / len(result)
+
+                                eval_result = self.evaluate(val_x, val_y, batch_size)
+                                for name, result in eval_result.items():
+                                    epoch_logs["val_" + name] = result
+
+                                eval_str = ""
+                                for name in self.metrics:
+                                    eval_str += " - " + name + \
+                                                ": {0: .4f}".format(epoch_logs[name])
+                                    eval_str += " - " + "val_" + name + \
+                                                ": {0: .4f}".format(epoch_logs["val_" + name])
+                                logger.info(eval_str)
+
+            except KeyboardInterrupt:
+                t.close()
+                raise
+            t.close()
+
+            # Add epoch_logs
+            epoch_logs["loss"] = total_loss_epoch / sample_num
+            for name, result in train_result.items():
+                epoch_logs[name] = np.sum(result) / steps_per_epoch
+
+            if do_validation:
+                eval_result = self.evaluate(val_x, val_y, batch_size)
+                for name, result in eval_result.items():
+                    epoch_logs["val_" + name] = result
+
+            # verbose
+            if verbose > 0:
+                epoch_time = int(time.time() - start_time)
+                logger.info('Epoch {0}/{1}'.format(epoch + 1, epochs))
+
+                eval_str = "{0}s - loss: {1: .4f}".format(
+                    epoch_time, epoch_logs["loss"])
+
+                for name in self.metrics:
+                    eval_str += " - " + name + \
+                                ": {0: .4f}".format(epoch_logs[name])
+
+                if do_validation:
+                    for name in self.metrics:
+                        eval_str += " - " + "val_" + name + \
+                                    ": {0: .4f}".format(epoch_logs["val_" + name])
+                logger.info(eval_str)
+
+            callbacks.on_epoch_end(epoch, epoch_logs)
+            if self.stop_training:
+                break
+
+        callbacks.on_train_end()
+
+        return self.history
+
     def evaluate(self, x, y, batch_size=256):
         """
 
