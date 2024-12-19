@@ -1,3 +1,4 @@
+/data/
 *.ckpt
 .idea/
 # Byte-compiled / optimized / DLL files
