@@ -59,6 +59,32 @@ def bcecc_loss(logits, labels, embeddings, alpha=0.9, tau=0.4, beta_pos=1.0):
     # print("BCE Loss:", bce_loss.item(), "Contrastive Loss:", loss_contrastive.item(), "Total Loss (L_CC):", loss_cc.item())
     return loss_cc
 
+def focal_loss(logits, targets, alpha=0.9, gamma=2.0,reduction="sum"):
+        """
+        Args:
+            logits: 模型的原始输出，形状为 (B, 1)
+            targets: 真实标签，形状为 (B, )
+        Returns:
+            focal_loss: 计算得到的 Focal Loss
+        """
+        # 将 logits 转换为概率值
+        probs = torch.sigmoid(logits)  # p_t
+        probs = probs.view(-1)
+        targets = targets.view(-1).float()
+
+        # 计算 Focal Loss
+        loss_pos = -alpha * (1 - probs) ** gamma * targets * torch.log(probs + 1e-8)
+        loss_neg = -(1 - alpha) * probs ** gamma * (1 - targets) * torch.log(1 - probs + 1e-8)
+        loss = loss_pos + loss_neg
+
+        # 根据 reduction 参数进行处理
+        if reduction == 'mean':
+            return loss.mean()
+        elif reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+
 # ========== 简单二分类网络定义 ==========
 class SimpleClassifier(nn.Module):
     def __init__(self, input_dim, embedding_dim):

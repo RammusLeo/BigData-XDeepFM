@@ -14,7 +14,6 @@ from deepctr_torch.callbacks import EarlyStopping
 parser = argparse.ArgumentParser()
 parser.add_argument('--log', type=str, default='my_log_file.txt', help='log place')
 parser.add_argument('--gpu', type=int, default=0, help='gpu id')
-parser.add_argument('--loss_type', type=str, default='binary_crossentropy', help='loss type')
 args = parser.parse_args()
 
 if __name__ == "__main__":
@@ -78,7 +77,7 @@ if __name__ == "__main__":
                    task='binary',
                    l2_reg_embedding=1e-5, device=device)
  
-    model.compile("adagrad", args.loss_type,
+    model.compile("adagrad", "binary_crossentropy",
                   metrics=["binary_crossentropy", "auc"])
  
     history = model.fit(train_model_input, data_train[target].values, batch_size=256, epochs=10, verbose=2,

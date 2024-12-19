@@ -30,7 +30,7 @@ from ..layers import PredictionLayer
 from ..layers.utils import slice_arrays
 from ..callbacks import History
 from ..losses import combined_loss
-from ..new_losses import bcecc_loss
+from ..new_losses import bcecc_loss, focal_loss
 
 
 class Linear(nn.Module):
@@ -550,6 +550,8 @@ class BaseModel(nn.Module):
             loss_func = combined_loss
         elif loss == "new_bce_cont":
             loss_func = bcecc_loss
+        elif loss == "focal":
+            loss_func = focal_loss
         else:
             raise NotImplementedError
         return loss_func
