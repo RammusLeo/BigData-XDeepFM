@@ -78,9 +78,35 @@ def combined_loss(y_pred, labels, z, alpha=0.9, tau=0.4):
     # print(f"Contrastive Loss: {loss_contrastive.item()}, BCE Loss: {loss_bce.item()}")
     return total_loss
 
+def mse_loss(y_pred, labels):
+    """
+    Compute Mean Squared Error (MSE) loss.
+
+    Args:
+        y_pred (torch.Tensor): Predicted values.
+        labels (torch.Tensor): Ground truth values.
+
+    Returns:
+        torch.Tensor: MSE loss.
+    """
+    return F.mse_loss(y_pred, labels)
+
+def l1_loss(y_pred, labels):
+    """
+    Compute L1 loss.
+
+    Args:
+        y_pred (torch.Tensor): Predicted values.
+        labels (torch.Tensor): Ground truth values.
+
+    Returns:
+        torch.Tensor: L1 loss.
+    """
+    return F.l1_loss(y_pred, labels)
+
 # Example Usage
 if __name__ == "__main__":
-    # Dummy logits (batch size 4, embedding dimension 5)
+    # Dummy logits (batch size 4, embedding dimension 2)
     z = torch.randn(4, 2, requires_grad=True)
     logits = nn.Sigmoid()(z)
     y_pred = torch.argmax(logits, dim=1)
@@ -89,5 +115,10 @@ if __name__ == "__main__":
 
     # Alpha for weighting losses
     alpha = 0.9
-    loss = combined_loss(labels, y_pred, z, logits, alpha=alpha, tau=0.4)
-    print(f"Combined Loss: {loss.item()}")
+    combined = combined_loss(labels, y_pred, z, alpha=alpha, tau=0.4)
+    mse = mse_loss(y_pred.float(), labels)
+    l1 = l1_loss(y_pred.float(), labels)
+
+    print(f"Combined Loss: {combined.item()}")
+    print(f"MSE Loss: {mse.item()}")
+    print(f"L1 Loss: {l1.item()}")
