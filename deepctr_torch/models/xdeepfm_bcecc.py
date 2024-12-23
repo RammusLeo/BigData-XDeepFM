@@ -155,3 +155,18 @@ class xDeepFM_BCECC(BaseModel):
         final_logit = self.final_logit(fusion_feature)
 
         return fusion_feature, final_logit
+    
+    def visualize_features(self, features):
+        """
+        Visualize the features using a heatmap.
+
+        Args:
+        features (torch.Tensor): The features to visualize.
+        """
+        features = features.detach().cpu().numpy()
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(features, cmap='viridis')
+        plt.title('Feature Visualization')
+        plt.xlabel('Feature Dimension')
+        plt.ylabel('Sample Index')
+        plt.savefig('feature_visualization.png')
