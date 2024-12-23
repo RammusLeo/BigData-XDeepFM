@@ -96,6 +96,54 @@ class SimpleClassifier(nn.Module):
         embeddings = self.embedding_layer(x)
         logits = self.classifier(embeddings)
         return embeddings, logits
+    
+
+class CustomLoss(nn.Module):
+    def __init__(self, alpha=0.9, tau=0.4, beta_pos=1.0):
+        super(CustomLoss, self).__init__()
+        self.alpha = alpha
+        self.tau = tau
+        self.beta_pos = beta_pos
+
+    def forward(self, embeddings, targets, logits):
+        # ...existing code...
+        targets = targets.view(-1).float()
+
+        # 计算 Focal Loss
+        loss_pos = -self.alpha * (1 - probs) ** gamma * targets * torch.log(probs + 1e-8)
+        loss_neg = -(1 - self.alpha) * probs ** gamma * (1 - targets) * torch.log(1 - probs + 1e-8)
+        loss = loss_pos + loss_neg
+
+        # 根据 reduction 参数进行处理
+        if reduction == 'mean':
+            return loss.mean()
+        elif reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+
+class HuberLoss(nn.Module):
+    def __init__(self, delta=1.0):
+        super(HuberLoss, self).__init__()
+        self.delta = delta
+
+    def forward(self, y_pred, y_true):
+        error = y_true - y_pred
+        abs_error = torch.abs(error)
+        quadratic = torch.min(abs_error, self.delta)
+        linear = abs_error - quadratic
+        loss = 0.5 * quadratic ** 2 + self.delta * linear
+        return loss.mean()
+
+class SmoothL1Loss(nn.Module):
+    def __init__(self, beta=1.0):
+        super(SmoothL1Loss, self).__init__()
+        self.beta = beta
+
+    def forward(self, y_pred, y_true):
+        diff = torch.abs(y_true - y_pred)
+        loss = torch.where(diff < self.beta, 0.5 * diff ** 2 / self.beta, diff - 0.5 * self.beta)
+        return loss.mean()
 
 # ========== 测试代码 ==========
 if __name__ == "__main__":
